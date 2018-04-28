@@ -357,6 +357,7 @@ cdef class DiscoverdDevice:
 
 cdef class Device:
     cdef fp_dev *ptr
+    cdef fp_print_data **asyncGalleryArr
 
     def __nonzero__(self):
         return self.ptr != NULL
@@ -365,6 +366,7 @@ cdef class Device:
     cdef new(fp_dev *ptr):
         d = Device()
         d.ptr = ptr
+        d.asyncGalleryArr = NULL
         return d
 
     @staticmethod
@@ -489,13 +491,15 @@ cdef class Device:
     def identify_start(self, callback, gallery):
         cdef size_t off
         cdef size_t n
-        cdef fp_print_data **arr
 
         if self.ptr != NULL:
             off = 0
             n = len(gallery) + 1
-            arr = <fp_print_data **>malloc(n * sizeof(void*))
-            r = fp_async_identify_start(self.ptr, arr, Device.identify_callback, <void *>callback)
+            self.asyncGalleryArr = <fp_print_data **>malloc(n * sizeof(void*))
+            self.asyncGalleryArr[n - 1] = NULL
+            for idx, pd in enumerate(gallery):
+                self.asyncGalleryArr[idx] = (<PrintData>pd).ptr
+            r = fp_async_identify_start(self.ptr, self.asyncGalleryArr, Device.identify_callback, <void *>callback)
             if r < 0:
                 raise RuntimeError("Internal I/O error while starting identification: %i" % r)
 
@@ -508,11 +512,22 @@ cdef class Device:
             r = fp_async_identify_stop(self.ptr, Device.identify_stop_callback, <void *>callback)
             if r < 0:
                 raise RuntimeError("Internal I/O error while stopping identification: %i" % r)
+            free(self.asyncGalleryArr)
+            self.asyncGalleryArr = NULL
     
     def handle_events(self):
         r = fp_handle_events()
         if r < 0:
             raise RuntimeError("Internal I/O error while handling events: %i" % r)
+
+    def get_pollfds(self):
+        cdef fp_pollfd * pollfds
+        fds = []
+        n = fp_get_pollfds(&pollfds)
+        for i in range(n):
+            fds.append((pollfds[i].fd, pollfds[i].events))
+        free(pollfds)
+        return fds
 
     def verify_finger(self, PrintData pd):
         if self.ptr != NULL:
